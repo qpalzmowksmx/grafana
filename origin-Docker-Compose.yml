@@ -1,0 +1,327 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0.41
+    container_name: apisql1-2
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: AKJ1passwd
+      MYSQL_USER: ksj
+      MYSQL_PASSWORD: Aurora5
+      MYSQL_DATABASE: flight_data
+    ports:
+      - "3308:3306"
+    volumes:
+      - "C:/docker-gra/mysql/conf/my_custom.cnf:/etc/mysql/conf.d/my_custom.cnf"
+      - "./csv/airportstring_ICN:/csv_files/airportstring_ICN"
+      - "./mysql/conf/my_custom.cnf:/etc/mysql/conf.d/my_custom.cnf"
+      - "./mysql/sql/create_tables.sql:/docker-entrypoint-initdb.d/create_tables.sql"
+      - mysql-data:/var/lib/mysql
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "ksj", "--password=Aurora5"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mysqld_exporter:
+    image: quay.io/prometheus/mysqld-exporter:latest
+    container_name: mysqld_exporter
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_NAME=ksj:Aurora5@(apisql1-2:3308)/
+    # command:
+    #   - '--web.listen-address=:9104'
+    #   - '--collect.info_schema.tables'
+    #   - '--collect.info_schema.innodb_metrics'
+    #   - '--collect.global_status'
+    #   - '--collect.global_variables'
+    #   - '--collect.slave_status'
+    #   - '--collect.info_schema.processlist'
+    command:
+    - "--mysqld.username=flask_user:flask_password"
+    - "--mysqld.address=127.0.0.1:3306"
+    volumes:
+      - "C:/docker-gra/mysql/conf/my_custom.cnf:/etc/mysql/conf.d/my_custom.cnf"
+    ports:
+      - "9104:9104"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - monitoring
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    depends_on:
+      - mysqld_exporter
+    networks:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin  # 테스트라 쉽게함
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - grafana-storage:/var/lib/grafana  # Grafana 데이터를 위한 볼륨 마운트 추가
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring
+
+volumes:
+  grafana-storage:
+  mysql-data:
+
+networks:
+  monitoring:
+    driver: bridge
+
+
+  # 이건 마스터 1개에 프로메테우스랑 그라파나 동작 테스트용
+
+# 이건 디렉토리 형태 설명
+#   project-root/
+# ├── docker-compose.yml
+# ├── prometheus/
+# │   └── prometheus.yml
+# ├── grafana/
+# │   └── dashboards/ (옵션: 사용자 정의 대시보드)
+# └── mysql/
+#     ├── conf/
+#     │   └── my_custom.cnf
+#     ├── csv/
+#     │   ├── day15to23/
+#     │   └── airportstring_ICN/
+#     └── sql/
+#         └── create_tables.sql
+
+
+
+
+# 이건 prometheus/prometheus.yml
+# 안에 넣을 파일인데 같이 적어둠
+# prometheus.yml
+# 내용
+# global:
+#   scrape_interval: 15s  # 메트릭 스크랩 간격 일단 15초로 해봄봄
+
+# scrape_configs:
+#   - job_name: 'mysql'
+#     static_configs:
+#       - targets: ['mysqld_exporter:9104']  # mysqld_exporter 서비스
+
+#   - job_name: 'prometheus'
+#     static_configs:
+#       - targets: ['localhost:9090']  # Prometheus 자체 원래꺼
+
+# 이건 proxy_exporter.yml
+#   - job_name: 'proxysql'
+#     static_configs:
+#       - targets: ['proxy_sql_exporter:9104']  # ProxySQL Exporter 서비스
+
+
+
+
+
+# 이건 mysql/conf/my_custom.cnf
+
+# my_custom.cnf
+# 내용
+# [mysqld]
+# # 기본적인 성능 향상 설정
+# max_connections = 200
+# innodb_buffer_pool_size = 1G
+# query_cache_size = 0
+
+# # 로그 설정
+# slow_query_log = 1
+# slow_query_log_file = /var/log/mysql/slow.log
+# long_query_time = 2
+
+# # 레플리케이션 설정 (예시)
+# server-id = 1
+# log_bin = /var/log/mysql/mysql-bin.log
+# binlog_do_db = flight_data
+
+# # 기타 커스텀 설정
+# sql_mode = STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION
+
+# max_connections: 최대 동시 접속 수.
+# innodb_buffer_pool_size: InnoDB 버퍼 풀 크기 (메모리 기반).
+# query_cache_size: 쿼리 캐시 크기 (MySQL 8.0에서는 지원되지 않음).
+# slow_query_log: 느린 쿼리 로그 활성화 여부.
+# long_query_time: 느린 쿼리로 간주되는 기준 시간 (초).
+# server-id: 레플리케이션을 위한 서버 ID.
+# log_bin: 바이너리 로그 활성화.
+# binlog_do_db: 레플리케이션 대상 데이터베이스 지정.
+# sql_mode: SQL 모드 설정.
+
+
+#######################################################################
+
+# ProxySQL 설정 파일
+# 이건 proxysql/proxysql.yml
+  # proxy_sql:
+  #   image: proxysql/proxysql:latest
+  #   container_name: proxysql
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6033:6033"  # ProxySQL 포트
+  #     - "6032:6032"  # Admin 포트
+  #   environment:
+  #     PROXYSQL_ADMIN_USERNAME: admin
+  #     PROXYSQL_ADMIN_PASSWORD: adminpassword
+  #     PROXYSQL_MYSQL_ADMIN_USERNAME: root
+  #     PROXYSQL_MYSQL_ADMIN_PASSWORD: AKJ1passwd
+  #   volumes:
+  #     - ./proxysql/config.cnf:/etc/proxysql.cnf
+  #   depends_on:
+  #     - mysql
+
+  # proxy_sql_exporter:
+  #   image: danomed/prometheus-proxysql-exporter:latest
+  #   container_name: proxy_sql_exporter
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9105:9104"  # ProxySQL Exporter 포트
+  #   environment:
+  #     PROXYSQL_HOST: proxysql
+  #     PROXYSQL_PORT: 6032
+  #     PROXYSQL_ADMIN_USERNAME: admin
+  #     PROXYSQL_ADMIN_PASSWORD: adminpassword
+  #   depends_on:
+  #     - proxy_sql
+
+# 이건 proxysql/config.yml 의 내용이 반영된 전체 yml
+
+
+# version: '3.8'
+
+# services:
+#   mysql:
+#     image: mysql:8.0.41
+#     container_name: apisql1-2
+#     restart: unless-stopped
+#     environment:
+#       MYSQL_ROOT_PASSWORD: AKJ1passwd
+#       MYSQL_USER: ksj
+#       MYSQL_PASSWORD: Aurora5
+#       MYSQL_DATABASE: flight_data
+#     ports:
+#       - "3307:3306"
+#     volumes:
+#       - "D:/FlightData:/csv_files/FlightData"
+#       - "./csv/day15to23:/csv_files/day15to23"
+#       - "./csv/airportstring_ICN:/csv_files/airportstring_ICN"
+#       - "./mysql/conf/my_custom.cnf:/etc/mysql/conf.d/my_custom.cnf"
+#       - "./mysql/sql/create_tables.sql:/docker-entrypoint-initdb.d/create_tables.sql"
+
+#   mysqld_exporter:
+#     image: prom/mysqld-exporter:latest
+#     container_name: mysqld_exporter
+#     restart: unless-stopped
+#     environment:
+#       DATA_SOURCE_NAME: "ksj:root@tcp(mysql:3306)/"
+#     ports:
+#       - "9104:9104"
+#     depends_on:
+#       - mysql
+
+#   proxy_sql:
+#     image: proxysql/proxysql:latest
+#     container_name: proxysql
+#     restart: unless-stopped
+#     ports:
+#       - "6033:6033"  # ProxySQL 포트
+#       - "6032:6032"  # Admin 포트
+#     environment:
+#       PROXYSQL_ADMIN_USERNAME: admin
+#       PROXYSQL_ADMIN_PASSWORD: adminpassword
+#       PROXYSQL_MYSQL_ADMIN_USERNAME: root
+#       PROXYSQL_MYSQL_ADMIN_PASSWORD: AKJ1passwd
+#     volumes:
+#       - ./proxysql/config.cnf:/etc/proxysql.cnf
+#     depends_on:
+#       - mysql
+
+#   proxy_sql_exporter:
+#     image: danomed/prometheus-proxysql-exporter:latest
+#     container_name: proxy_sql_exporter
+#     restart: unless-stopped
+#     ports:
+#       - "9105:9104"  # ProxySQL Exporter 포트
+#     environment:
+#       PROXYSQL_HOST: proxysql
+#       PROXYSQL_PORT: 6032
+#       PROXYSQL_ADMIN_USERNAME: admin
+#       PROXYSQL_ADMIN_PASSWORD: adminpassword
+#     depends_on:
+#       - proxy_sql
+
+#   prometheus:
+#     image: prom/prometheus:latest
+#     container_name: prometheus
+#     restart: unless-stopped
+#     volumes:
+#       - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
+#     ports:
+#       - "9090:9090"
+#     command:
+#       - '--config.file=/etc/prometheus/prometheus.yml'
+#     depends_on:
+#       - mysqld_exporter
+#       - proxy_sql_exporter
+
+#   grafana:
+#     image: grafana/grafana:latest
+#     container_name: grafana
+#     restart: unless-stopped
+#     environment:
+#       - GF_SECURITY_ADMIN_PASSWORD=yourgrafanapassword
+#     ports:
+#       - "3000:3000"
+#     volumes:
+#       - grafana-storage:/var/lib/grafana
+#       - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+#     depends_on:
+#       - prometheus
+
+# volumes:
+#   grafana-storage:
+
+# ProxySQL 설정 파일 (proxysql/config.cnf
+
+# datadir="/var/lib/proxysql"
+
+# admin_variables=
+# {
+#     admin_credentials="admin:adminpassword"
+#     mysql_ifaces="0.0.0.0:6032"
+# }
+
+# mysql_variables=
+# {
+#     threads=4
+#     max_connections=2048
+#     default_query_delay=0
+#     default_query_timeout=36000000
+#     poll_timeout=2000
+# }
+
